@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"github.com/gin-gonic/gin"
@@ -16,7 +17,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 )
 
 // 인증 관련 라우터입니다
@@ -37,14 +37,17 @@ func KakaoLogin(c *gin.Context) {
 		return
 	}
 
-	client := &http.Client{}
-
 	// code를 이용해 kakao access token을 요청하는 코드입니다
-	postData := "grant_type=authorization_code" + "&client_id=" + os.Getenv("KAKAO_ID") +
-		"&redirect_uri=" + os.Getenv("KAKAO_REDIRECT_URI") +
-		"&code=" + *code
+	data := map[string]string{
+		"grant_type":   "authorization_code",
+		"client_id":    os.Getenv("KAKAO_ID"),
+		"redirect_uri": os.Getenv("KAKAO_REDIRECT_URI"),
+		"code":         *code,
+	}
 
-	kakaoTokenReq, err := http.NewRequest("POST", kakaoTokenURL, strings.NewReader(postData))
+	body, _ := json.Marshal(data)
+
+	kakaoTokenReq, err := http.Post(kakaoTokenURL, "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -52,15 +55,9 @@ func KakaoLogin(c *gin.Context) {
 	}
 
 	kakaoTokenReq.Header.Add("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
+	defer kakaoTokenReq.Body.Close()
 
-	res, err := client.Do(kakaoTokenReq)
-	if err != nil {
-		log.Error(err)
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-
-	kakaoToken, err := io.ReadAll(res.Body)
+	kakaoToken, err := io.ReadAll(kakaoTokenReq.Body)
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -78,24 +75,17 @@ func KakaoLogin(c *gin.Context) {
 	}
 
 	// 카카오 access token을 이용해 유저 정보를 요청하는 코드입니다
-	req, err := http.NewRequest("GET", kakaoAPIURL, nil)
+	kakaoUserReq, err := http.Get(kakaoAPIURL)
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
-	req.Header.Add("Authorization", "Bearer "+kakaoTokenResponse.AccessToken)
+	kakaoUserReq.Header.Add("Authorization", "Bearer "+kakaoTokenResponse.AccessToken)
+	defer kakaoUserReq.Body.Close()
 
-	res, err = client.Do(req)
-	if err != nil {
-		log.Error(err)
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-	defer res.Body.Close()
-
-	respBody, err := io.ReadAll(res.Body)
+	respBody, err := io.ReadAll(kakaoUserReq.Body)
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
