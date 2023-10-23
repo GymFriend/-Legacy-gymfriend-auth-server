@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"github.com/gin-gonic/gin"
@@ -17,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 )
 
 // 인증 관련 라우터입니다
@@ -37,17 +37,14 @@ func KakaoLogin(c *gin.Context) {
 		return
 	}
 
+	client := &http.Client{}
+
 	// code를 이용해 kakao access token을 요청하는 코드입니다
-	data := map[string]string{
-		"grant_type":   "authorization_code",
-		"client_id":    os.Getenv("KAKAO_ID"),
-		"redirect_uri": os.Getenv("KAKAO_REDIRECT_URI"),
-		"code":         *code,
-	}
+	postData := "grant_type=authorization_code" + "&client_id=" + os.Getenv("KAKAO_ID") +
+		"&redirect_uri=" + os.Getenv("KAKAO_REDIRECT_URI") +
+		"&code=" + *code
 
-	body, _ := json.Marshal(data)
-
-	kakaoTokenReq, err := http.Post(kakaoTokenURL, "application/json", bytes.NewBuffer(body))
+	kakaoTokenReq, err := http.NewRequest("POST", kakaoTokenURL, strings.NewReader(postData))
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -55,9 +52,16 @@ func KakaoLogin(c *gin.Context) {
 	}
 
 	kakaoTokenReq.Header.Add("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
-	defer kakaoTokenReq.Body.Close()
 
-	kakaoToken, err := io.ReadAll(kakaoTokenReq.Body)
+	kakaoTokenRes, err := client.Do(kakaoTokenReq)
+	if err != nil {
+		log.Error(err)
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	defer kakaoTokenRes.Body.Close()
+
+	kakaoTokenBody, err := io.ReadAll(kakaoTokenRes.Body)
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -66,7 +70,7 @@ func KakaoLogin(c *gin.Context) {
 
 	kakaoTokenResponse := model.KakaoTokenResponse{}
 
-	if err = json.Unmarshal(kakaoToken, &kakaoTokenResponse); err != nil {
+	if err = json.Unmarshal(kakaoTokenBody, &kakaoTokenResponse); err != nil {
 		if err != nil {
 			log.Error(err)
 			c.AbortWithStatus(http.StatusInternalServerError)
@@ -75,7 +79,7 @@ func KakaoLogin(c *gin.Context) {
 	}
 
 	// 카카오 access token을 이용해 유저 정보를 요청하는 코드입니다
-	kakaoUserReq, err := http.Get(kakaoAPIURL)
+	kakaoUserReq, err := http.NewRequest("GET", kakaoAPIURL, nil)
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -83,9 +87,16 @@ func KakaoLogin(c *gin.Context) {
 	}
 
 	kakaoUserReq.Header.Add("Authorization", "Bearer "+kakaoTokenResponse.AccessToken)
-	defer kakaoUserReq.Body.Close()
 
-	respBody, err := io.ReadAll(kakaoUserReq.Body)
+	kakaoUserRes, err := client.Do(kakaoUserReq)
+	if err != nil {
+		log.Error(err)
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	defer kakaoUserRes.Body.Close()
+
+	kakaoUserBody, err := io.ReadAll(kakaoUserRes.Body)
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -98,9 +109,14 @@ func KakaoLogin(c *gin.Context) {
 		kakaoResp model.KakaoResponse
 	)
 
-	if err = json.Unmarshal(respBody, &kakaoResp); err != nil {
+	if err = json.Unmarshal(kakaoUserBody, &kakaoResp); err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	if kakaoResp.ID == 0 {
+		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
 
